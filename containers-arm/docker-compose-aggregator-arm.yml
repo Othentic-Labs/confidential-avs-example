@@ -1,0 +1,30 @@
+services:
+  aggregator:
+    image: ghcr.io/alexr-scrt/aggregator-arm:latest
+    container_name: aggregator
+    restart: unless-stopped
+    
+    command: [
+      "run",
+      "aggregator",
+      "--json-rpc",
+      # "--internal-tasks"
+    ]
+    environment:
+      - PRIVATE_KEY=${PRIVATE_KEY_AGGREGATOR}
+      - L1_CHAIN=${L1_CHAIN}
+      - L2_CHAIN=${L2_CHAIN}
+    ports:
+      - "8545:8545"
+      - "9876:9876"
+    networks:
+      p2p:
+        ipv4_address: 10.8.0.69
+
+networks:
+  p2p:
+    driver: bridge
+    ipam:
+     config:
+       - subnet: 10.8.0.0/16
+         gateway: 10.8.0.1
