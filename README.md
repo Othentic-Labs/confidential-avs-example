@@ -2,14 +2,31 @@
 
 ---
 
+This example shows how to build a Confidential AVS using Othentic and TEE-powered SecretVM.
+
+Unlike traditional AVS, in Confidential AVS neither the Performer nor the Attester nodes can see the actual data. All the computations are peformed in TEEs by Performers, and the Attesters only verify that the Performer nodes are indeed running the expected code.
+
+Besides the obvious benefit of protecting the user data, this architecture also radically simplifies the Attester node - now the Attester only needs to validate the cryptographic attestation of the Performer node and check the signature of the message to verify it originates from an authentic Performer.
+
+This sample AVS performs KYC on documents supplied by the user. The document (e.g. passport) picture is first sent to a confidential AI model (running in a TEE) to extract the user's nationality and age.
+
+Then, the Performer creates a message that contains the user's nationality, and two more Boolean fields: is_over_18 and is_over_21. During the execution, the user data never leaves the encrypted TEE environments and can not be observed either by the Performer node operators or by Attester node operators.
+
 ## Table of Contents
 
-1. [Overview](#overview)
-2. [Project Structure](#project-structure)
-3. [Architecture](#architecture)
-4. [Prerequisites](#prerequisites)
-5. [Installation](#installation)
-6. [Usage](#usage)
+- [Confidential AVS Example](#confidential-avs-example)
+  - [Table of Contents](#table-of-contents)
+  - [Overview](#overview)
+  - [Project Structure](#project-structure)
+  - [Architecture](#architecture)
+  - [Prerequisites](#prerequisites)
+  - [Usage](#usage)
+  - [Service Start-up Order](#service-start-up-order)
+    - [1. Start Aggregator](#1-start-aggregator)
+    - [2. Start Attesters](#2-start-attesters)
+    - [3. Start Validation Service](#3-start-validation-service)
+    - [4. Start Execution Service](#4-start-execution-service)
+    - [Troubleshooting](#troubleshooting)
 
 ---
 
@@ -21,13 +38,12 @@ The Simple Price Oracle AVS Example demonstrates how to deploy a minimal AVS usi
 ## Project Structure
 
 ```mdx
-📂 simple-price-oracle-avs-example
+📂 confidential-avs-example
 ├── 📂 Execution_Service         # Implements Task execution logic - Express JS Backend
 │   ├── 📂 config/
 │   │   └── app.config.js        # An Express.js app setup with dotenv, and a task controller route for handling `/task` endpoints.
 │   ├── 📂 src/
 │   │   └── dal.service.js       # A module that interacts with Pinata for IPFS uploads
-│   │   ├── oracle.service.js    # A utility module to fetch the current price of a cryptocurrency pair from the Binance API
 │   │   ├── task.controller.js   # An Express.js router handling a `/execute` POST endpoint
 │   │   ├── 📂 utils             # Defines two custom classes, CustomResponse and CustomError, for standardizing API responses
 │   ├── Dockerfile               # A Dockerfile that sets up a Node.js (22.6) environment, exposes port 8080, and runs the application via index.js
@@ -39,9 +55,9 @@ The Simple Price Oracle AVS Example demonstrates how to deploy a minimal AVS usi
 │   │   └── app.config.js         # An Express.js app setup with a task controller route for handling `/task` endpoints.
 │   ├── 📂 src/
 │   │   └── dal.service.js        # A module that interacts with Pinata for IPFS uploads
-│   │   ├── oracle.service.js     # A utility module to fetch the current price of a cryptocurrency pair from the Binance API
+
 │   │   ├── task.controller.js    # An Express.js router handling a `/validate` POST endpoint
-│   │   ├── validator.service.js  # A validation module that checks if a task result from IPFS matches the ETH/USDT price within a 5% margin.
+│   │   ├── verify.service.js  # A validation module that checks if a task result from IPFS matches the ETH/USDT price within a 5% margin.
 │   │   ├── 📂 utils              # Defines two custom classes, CustomResponse and CustomError, for standardizing API responses.
 │   ├── Dockerfile                # A Dockerfile that sets up a Node.js (22.6) environment, exposes port 8080, and runs the application via index.js.
 |   ├── index.js                  # A Node.js server entry point that initializes the DAL service, loads the app configuration, and starts the server on the specified port.
@@ -56,16 +72,26 @@ The Simple Price Oracle AVS Example demonstrates how to deploy a minimal AVS usi
 
 ## Architecture
 
-![Price oracle sample](https://github.com/user-attachments/assets/03d544eb-d9c3-44a7-9712-531220c94f7e)
+The Confidential AVS example uses the following architecture:
 
-The Performer node executes tasks using the Task Execution Service and sends the results to the p2p network.
-
-Attester Nodes validate task execution through the Validation Service. Based on the Validation Service's response, attesters sign the tasks. In this AVS:
-
-Task Execution logic:
+<img width="15684" height="10067" alt="image" src="https://github.com/user-attachments/assets/ac99f540-bcdb-4cc7-bbe0-a1e1b6313b2e" />
 
 
-Validation Service logic:
+The Performer node is deployed in a TEE-powered SecretVM ([secretai.scrtlabs.com/secret-vms](https://secretai.scrtlabs.com/secret-vms)).  
+The ([attestation registers](https://docs.scrt.network/secret-network-documentation/secretvm-confidential-virtual-machines/attestation/attestation-report-key-fields)) identifying the Performer node should be known to the Atester nodes.
+
+The Performer Node receives information from the end user (in this case, images representing the users' government-issued IDs). The Performer node then passes the images to an image-analysys LLM in order to retrieve information about the user's citizenship and age.
+
+Once the image recognition is complete, Performer creates a  ([verifiably signed message](https://docs.scrt.network/secret-network-documentation/secretvm-confidential-virtual-machines/verifiable-message-signing)) contaning the user's nationality and two additional Boolean fields desribing the user's age:
+- is_over_18
+- is_over_21
+
+The message and the Atestation Quote of the Performer Node is then passed to the P2P networking layers and can be verified by the Attesters
+
+Attester nodes perform the following verification routine:
+1. Verify the message
+2. Verify the authenticity of the Attestation
+3. Verify that the attestation registers match the expected value (meaning that the Performer Node code has not been tampered with)
 
 ---
 
@@ -104,10 +130,80 @@ Validation Service logic:
 4. Follow the steps in the official documentation's [Quickstart](https://docs.othentic.xyz/main/welcome/getting-started/install-othentic-cli) Guide for setup and deployment.
 
    ```
-   cd simple-price-oracle-avs-example
+   cd kyc-avs-demo
    docker compose build --no-cache
    docker compose up
    curl -X POST http://localhost:4003/task/execute
+   ```
+
+## Service Start-up Order
+
+To ensure proper initialization and communication between services, start them in the following order:
+
+### 1. Start Aggregator
+```bash
+docker compose -f docker-compose-aggregator.yml up -d
+```
+
+### 2. Start Attesters
+```bash
+for i in 1 2 3; do
+  docker compose -f docker-compose-attester-$i.yml up -d
+done
+```
+
+### 3. Start Validation Service
+```bash
+docker compose -f docker-compose-validation-service.yml up -d
+```
+
+### 4. Start Execution Service
+```bash
+docker compose -f docker-compose-execution-service.yml up -d
+```
+
+### Troubleshooting
+
+If you encounter issues with service startup or communication:
+
+1. **Check container logs** for detailed error messages:
+   ```bash
+   docker compose -f docker-compose-aggregator.yml logs
+   docker compose -f docker-compose-attester-1.yml logs
+   docker compose -f docker-compose-validation-service.yml logs
+   docker compose -f docker-compose-execution-service.yml logs
+   ```
+
+2. **Verify network connectivity** between services:
+   ```bash
+   # Test connectivity to aggregator
+   ping 10.8.0.1
+   
+   # Test connectivity to attesters
+   ping 10.8.0.2
+   ping 10.8.0.3
+   ping 10.8.0.4
+   
+   # Test connectivity to validation service
+   ping 10.8.0.5
+   
+   # Test connectivity to execution service
+   ping 10.8.0.6
+   ```
+
+3. **Check service health** by monitoring container status:
+   ```bash
+   docker ps
+   ```
+
+4. **Restart services** if needed (in the same order as startup):
+   ```bash
+   docker compose -f docker-compose-aggregator.yml restart
+   docker compose -f docker-compose-attester-1.yml restart
+   docker compose -f docker-compose-attester-2.yml restart
+   docker compose -f docker-compose-attester-3.yml restart
+   docker compose -f docker-compose-validation-service.yml restart
+   docker compose -f docker-compose-execution-service.yml restart
    ```
 
 Happy Building! 🚀
